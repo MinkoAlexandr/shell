@@ -29,19 +29,6 @@ jobs:
           -v $PWD:/mnt \
           ghcr.io/minkoalexandr/shell/kubsh_test:master
 
-    - name: Install make and build dependencies
-      run: |
-        # Устанавливаем make и другие необходимые инструменты для сборки
-        sudo apt-get update
-        sudo apt-get install -y make build-essential debhelper dh-make
-
-    - name: Run make deb
-      run: |
-        echo "Running make deb to build the package..."
-        make deb
-        # Если make deb требует специфичных параметров, можно добавить их:
-        # make deb PREFIX=/usr
-
     - name: Verify kubsh.deb exists
       run: |
         echo "Checking for kubsh.deb file..."
