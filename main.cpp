@@ -115,16 +115,16 @@ int main() {
             } else {
                 scan_disk(disk_name);
             }
-        } else if (input.substr(0, 7) == "debug '" && input[input.length() - 1] == '\'')
+        } else if (cmd_line.substr(0, 7) == "debug '" && cmd_line[cmd_line.length() - 1] == '\'')
         {
 
-            std::cout << input.substr(7, input.length() - 8) << std::endl;  
+            std::cout << cmd_line.substr(7, cmd_line.length() - 8) << std::endl;  
             continue;  
 
         }
-          else if (input.substr(0,4) == "\\e $")
+          else if (cmd_line.substr(0,4) == "\\e $")
         {
-            std::string varName = input.substr(4);
+            std::string varName = cmd_line.substr(4);
             const char* value = std::getenv(varName.c_str());//Преобразуем C-строку в C++ строку
 
             if(value != nullptr)
@@ -186,7 +186,7 @@ int main() {
             std::vector<char*> args;
             std::string token;
             //Разбиваем по пробелам для аргументов
-            std::istringstream iss(input);
+            std::istringstream iss(cmd_line);
             
             while (iss >> token) 
             {
