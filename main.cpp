@@ -85,7 +85,7 @@ int main() {
     init_virtual_fs();
 
     const char* user_home = std::getenv("HOME");
-    std::string history_file = std::string(user_home) + "/.kubsh_log";
+    std::string historyPath = std::string(user_home) + "/.kubsh_history";
 
     signal(SIGHUP, handle_sighup);
     
@@ -93,12 +93,12 @@ int main() {
 
     for (std::string cmd_line; std::getline(std::cin, cmd_line);) {
         if (!cmd_line.empty()) {
-            std::ofstream log_stream(history_file, std::ios::app);
+            std::ofstream log_stream(historyPath, std::ios::app);
             log_stream << cmd_line << "\n";
         }
 
         if (cmd_line == "history") {
-            std::ifstream history_stream(history_file);
+            std::ifstream history_stream(historyPath);
             std::string previous_cmd;
             while (std::getline(history_stream, previous_cmd)) {
                 std::cout << previous_cmd << "\n";
