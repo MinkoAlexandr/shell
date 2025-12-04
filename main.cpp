@@ -122,7 +122,7 @@ int main() {
             continue;  
 
         }
-        } else if (input.substr(0,4) == "\\e $")
+        }  else if (input.substr(0,4) == "\\e $")
         {
             std::string varName = input.substr(4);
             const char* value = std::getenv(varName.c_str());//Преобразуем C-строку в C++ строку
@@ -171,38 +171,56 @@ int main() {
             }
             continue;
         }
-        } else {
-            pid_t child_pid = fork();
-            
-            if (child_pid == 0) {
-                std::vector<std::string> command_parts;
-                std::vector<char*> args_array;
-                std::string token;
-                std::istringstream cmd_stream(cmd_line);
-                
-                while (cmd_stream >> token) {
-                    command_parts.push_back(token);
-                }
-                
-                for (auto& part : command_parts) {
-                    args_array.push_back(const_cast<char*>(part.c_str()));
-                }
-                args_array.push_back(nullptr);
-                
-                execvp(args_array[0], args_array.data());
-                
-                std::cout << args_array[0] << ": unknown command\n";
-                exit(1);
-            } else if (child_pid > 0) {
-                int child_status;
-                waitpid(child_pid, &child_status, 0);
-            } else {
-                std::cerr << "Process creation failed\n";
-            }
-        }
+
+    else 
+    {
+        //Создаем процесс и записываем process id
+        pid_t pid = fork();
         
-        std::cout << "$ ";
+        //Если дочерний процесс(в нем выполним бинарник)
+        if (pid == 0) 
+        {
+            // Создаем копии строк для аргументов
+            std::vector<std::string> tokens;
+            //Указатели для execvp
+            std::vector<char*> args;
+            std::string token;
+            //Разбиваем по пробелам для аргументов
+            std::istringstream iss(input);
+            
+            while (iss >> token) 
+            {
+                tokens.push_back(token);  // Сохраняем копии
+            }
+            
+            // Преобразуем в char*
+            for (auto& t : tokens) 
+            {
+                args.push_back(const_cast<char*>(t.c_str()));
+            }
+            //Для execvp чтобы видел конец
+            args.push_back(nullptr);
+            
+            //Заменяем программу на новую
+            //args[0] - название команды, args.data() - ссылка на C массив строк для аргументов
+            execvp(args[0], args.data());
+            
+            //Если не нашли команду то выведет это(вернет управление), при успехе не дойдем до этих строк
+            std::cout << args[0] << ": command not found\n";
+            exit(1);
+            
+        } 
+        else if (pid > 0) 
+        {
+            int status;
+            //Ожидаем дочерний
+            waitpid(pid, &status, 0);
+        } 
+        else 
+        {
+            std::cerr << "Failed to create process\n";
+        }
     }
-    
-    return 0;
+        std::cout<<"$ ";
+    }
 }
