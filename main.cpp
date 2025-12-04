@@ -115,42 +115,62 @@ int main() {
             } else {
                 scan_disk(disk_name);
             }
-        } else if (cmd_line.substr(0, 7) == "debug '" && cmd_line.back() == '\'') {
-            std::cout << cmd_line.substr(7, cmd_line.length() - 8) << "\n";
-            continue;
-        } else if (cmd_line.substr(0, 4) == "\\e $") {
-            std::string env_var = cmd_line.substr(4);
-            const char* env_value = std::getenv(env_var.c_str());
-            
-            if (env_value != nullptr) {
-                std::string value_string = env_value;
-                bool contains_colon = false;
+        } else if (input.substr(0, 7) == "debug '" && input[input.length() - 1] == '\'')
+        {
+
+            std::cout << input.substr(7, input.length() - 8) << std::endl;  
+            continue;  
+
+        }
+        } else if (input.substr(0,4) == "\\e $")
+        {
+            std::string varName = input.substr(4);
+            const char* value = std::getenv(varName.c_str());//Преобразуем C-строку в C++ строку
+
+            if(value != nullptr)
+            {
+                std::string valueStr = value;
                 
-                for (char ch : value_string) {
-                    if (ch == ':') {
-                        contains_colon = true;
+                bool has_colon = false;//Флаг для проверки наличия двоеточий
+                for (char c : valueStr)//Проходим по символам из строки
+                {
+                    if (c == ':') 
+                    {
+                        has_colon = true;
                         break;
                     }
                 }
                 
-                if (contains_colon) {
-                    std::string segment;
-                    for (char ch : value_string) {
-                        if (ch == ':') {
-                            std::cout << segment << "\n";
-                            segment.clear();
-                        } else {
-                            segment += ch;
+                if (has_colon) 
+                {
+                    std::string current_part = "";//Временная строка для накопления текущей части пути
+                    for (char c : valueStr)//Разбиваем строку по двоеточиям
+
+                    {
+                        if (c == ':') 
+                        {
+                            std::cout << current_part << "\n";//Когда встречаем двоеточие - выводим накопленную часть
+                            current_part = "";//Сбрасываем временную строку для следующей части
+                        }
+                        else 
+                        {
+                            current_part += c;//Иначе добавляем символ к строке
+
                         }
                     }
-                    std::cout << segment << "\n";
-                } else {
-                    std::cout << value_string << "\n";
+                    std::cout << current_part << "\n";//Выводим последнюю часть (после последнего двоеточия)
                 }
-            } else {
-                std::cout << env_var << ": not found\n";
+                else 
+                { 
+                    std::cout << valueStr << "\n";//Если двоеточий нет - просто выводим значение как есть
+                }
+            }
+            else
+            {
+                std::cout << varName << ": не найдено\n";
             }
             continue;
+        }
         } else {
             pid_t child_pid = fork();
             
