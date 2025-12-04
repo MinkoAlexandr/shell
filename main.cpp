@@ -1,188 +1,267 @@
-#include <iostream>
-#include <string>
-#include <fstream>
+#define FUSE_USE_VERSION 35
+
 #include <unistd.h>
-#include <sys/wait.h>
-#include <vector>
-#include <sstream>
-#include <signal.h>
-#include <cstdint>
-
+#include <cstdlib>
+#include <cstring>
+#include <pwd.h>
+#include <sys/types.h>
+#include <cerrno>
+#include <ctime>
+#include <string>
 #include "vfs.hpp"
+#include <sys/wait.h>
+#include <fuse3/fuse.h>
+#include <pthread.h>
+#include <fcntl.h>
 
-void handle_sighup(int sig_num) {
-    if (sig_num == SIGHUP) {
-        std::cout << "Config updated\n";
-        std::cout << "$ ";
+int run_cmd(const char* cmd, char* const argv[]) {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        execvp(cmd, argv);
+        _exit(127);
     }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+        return 0;
+
+    return -1;
 }
 
-void scan_disk(const std::string& disk_path) {
-    std::ifstream disk_file(disk_path, std::ios::binary);
+bool valid_shell(struct passwd* pwd) {
+    if (!pwd || !pwd->pw_shell) 
+        return false;
+    size_t len = strlen(pwd->pw_shell);
+    return (len >= 2 && strcmp(pwd->pw_shell + len - 2, "sh") == 0);
+}
+
+int users_getattr(const char* path, struct stat* st, struct fuse_file_info* fi) {
+    (void) fi;
+    memset(st, 0, sizeof(struct stat));
     
-    if (!disk_file) {
-        std::cout << "Failed to access " << disk_path << "\n";
-        return;
+    time_t now = time(NULL);
+    st->st_atime = st->st_mtime = st->st_ctime = now;
+
+    if (strcmp(path, "/") == 0) {
+        st->st_mode = S_IFDIR | 0755;
+        st->st_uid = getuid();
+        st->st_gid = getgid();
+        return 0;
     }
-    
-    unsigned char boot_sector[512];
-    disk_file.read((char*)boot_sector, 512);
-    
-    if (disk_file.gcount() != 512) {
-        std::cout << "Disk read failure\n";
-        return;
-    }
-    
-    if (boot_sector[510] != 0x55 || boot_sector[511] != 0xAA) {
-        std::cout << "Invalid disk marker\n";
-        return;
-    }
-    
-    bool is_gpt_format = false;
-    for (int part_idx = 0; part_idx < 4; part_idx++) {
-        int table_start = 446 + part_idx * 16;
-        if (boot_sector[table_start + 4] == 0xEE) {
-            is_gpt_format = true;
-            break;
+
+    char username[256];
+    char filename[256];
+
+    if (sscanf(path, "/%255[^/]/%255[^/]", username, filename) == 2) {
+        struct passwd* pwd = getpwnam(username);
+
+        if (strcmp(filename, "id") != 0 &&
+            strcmp(filename, "home") != 0 &&
+            strcmp(filename, "shell") != 0) {
+            return -ENOENT;
         }
+
+        if (pwd != NULL) {
+            st->st_mode = S_IFREG | 0644;
+            st->st_uid = pwd->pw_uid;
+            st->st_gid = pwd->pw_gid;
+            st->st_size = 256;
+            return 0;
+        }
+        return -ENOENT;
     }
-    
-    if (!is_gpt_format) {
-        for (int part_idx = 0; part_idx < 4; part_idx++) {
-            int table_offset = 446 + part_idx * 16;
-            unsigned char partition_type = boot_sector[table_offset + 4];
-            
-            if (partition_type != 0) {
-                uint32_t sector_count = *(uint32_t*)&boot_sector[table_offset + 12];
-                uint32_t size_mb = sector_count / 2048;
-                bool can_boot = (boot_sector[table_offset] == 0x80);
-                
-                std::cout << "Part " << (part_idx + 1) << ": " 
-                          << size_mb << "MB, Boot: " 
-                          << (can_boot ? "Yes" : "No") << "\n";
+
+    if (sscanf(path, "/%255[^/]", username) == 1) {
+        struct passwd* pwd = getpwnam(username);
+        if (pwd != NULL) {
+            st->st_mode = S_IFDIR | 0755;
+            st->st_uid = pwd->pw_uid;
+            st->st_gid = pwd->pw_gid;
+            return 0;
+        }
+        return -ENOENT;
+    }
+
+    return -ENOENT;
+}
+
+int users_readdir(
+    const char* path,
+    void* buf, 
+    fuse_fill_dir_t filler, 
+    off_t offset, 
+    struct fuse_file_info* fi, 
+    enum fuse_readdir_flags flags
+) {
+    (void) offset;
+    (void) fi;
+    (void) flags;
+
+    filler(buf, ".", NULL, 0, FUSE_FILL_DIR_PLUS);
+    filler(buf, "..", NULL, 0, FUSE_FILL_DIR_PLUS);
+
+    if (strcmp(path, "/") == 0) {
+        struct passwd* pwd;
+        setpwent();
+
+        while ((pwd = getpwent()) != NULL) {
+            if (valid_shell(pwd)) {
+                filler(buf, pwd->pw_name, NULL, 0, FUSE_FILL_DIR_PLUS);
             }
         }
+
+        endpwent();
+        return 0;
+    }
+
+    char username[256] = {0};
+    if (sscanf(path, "/%255[^/]", username) == 1) {
+        struct passwd* pwd = getpwnam(username);
+        if (pwd != NULL) {
+            filler(buf, "id", NULL, 0, FUSE_FILL_DIR_PLUS);
+            filler(buf, "home", NULL, 0, FUSE_FILL_DIR_PLUS);
+            filler(buf, "shell", NULL, 0, FUSE_FILL_DIR_PLUS);
+            return 0;
+        }
+    }
+
+    return -ENOENT;
+}
+
+int users_read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info* fi) {
+    (void) fi;
+
+    char username[256];
+    char filename[256];
+
+    sscanf(path, "/%255[^/]/%255[^/]", username, filename);
+
+    struct passwd* pwd = getpwnam(username);
+    if (!pwd) return -ENOENT;
+    
+    char content[256];
+    content[0] = '\0';
+
+    if (strcmp(filename, "id") == 0) {
+        snprintf(content, sizeof(content), "%d", pwd->pw_uid);
+    } else if (strcmp(filename, "home") == 0) {
+        snprintf(content, sizeof(content), "%s", pwd->pw_dir);
     } else {
-        disk_file.read((char*)boot_sector, 512);
-        if (disk_file.gcount() == 512 && 
-            boot_sector[0] == 'E' && boot_sector[1] == 'F' && 
-            boot_sector[2] == 'I' && boot_sector[3] == ' ' &&
-            boot_sector[4] == 'P' && boot_sector[5] == 'A' &&
-            boot_sector[6] == 'R' && boot_sector[7] == 'T') {
-            
-            uint32_t part_count = *(uint32_t*)&boot_sector[80];
-            std::cout << "GPT partitions found: " << part_count << "\n";
-        } else {
-            std::cout << "GPT data unavailable\n";
-        }
+        snprintf(content, sizeof(content), "%s", pwd->pw_shell);
     }
+
+    size_t len = strlen(content);
+    if (len > 0 && content[len-1] == '\n') {
+        content[len-1] = '\0';
+        len--;
+    }
+
+    if ((size_t)offset >= len) {
+        return 0;
+    }
+
+    if (offset + size > len) {
+        size = len - offset;
+    }
+
+    memcpy(buf, content + offset, size);
+    return size;
 }
 
-int main() {
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
+int users_mkdir(const char* path, mode_t mode) {
+    (void) mode;
 
-    init_virtual_fs();
+    char username[256];
 
-    const char* user_home = std::getenv("HOME");
-    std::string history_file = std::string(user_home) + "/.kubsh_log";
-
-    signal(SIGHUP, handle_sighup);
-    
-    std::cout << "$ ";
-
-    for (std::string cmd_line; std::getline(std::cin, cmd_line);) {
-        if (!cmd_line.empty()) {
-            std::ofstream log_stream(history_file, std::ios::app);
-            log_stream << cmd_line << "\n";
-        }
-
-        if (cmd_line == "history") {
-            std::ifstream history_stream(history_file);
-            std::string previous_cmd;
-            while (std::getline(history_stream, previous_cmd)) {
-                std::cout << previous_cmd << "\n";
-            }
-        } else if (cmd_line == "\\q") {
-            break;
-        } else if (cmd_line.substr(0, 3) == "\\l ") {
-            std::string disk_name = cmd_line.substr(3);
-            disk_name.erase(0, disk_name.find_first_not_of(" \t"));
-            disk_name.erase(disk_name.find_last_not_of(" \t") + 1);
-            
-            if (disk_name.empty()) {
-                std::cout << "Format: \\l /dev/disk_name\n";
-            } else {
-                scan_disk(disk_name);
-            }
-        } else if (cmd_line.substr(0, 7) == "debug '" && cmd_line.back() == '\'') {
-            std::cout << cmd_line.substr(7, cmd_line.length() - 8) << "\n";
-            continue;
-        } else if (cmd_line.substr(0, 4) == "\\e $") {
-            std::string env_var = cmd_line.substr(4);
-            const char* env_value = std::getenv(env_var.c_str());
-            
-            if (env_value != nullptr) {
-                std::string value_string = env_value;
-                bool contains_colon = false;
-                
-                for (char ch : value_string) {
-                    if (ch == ':') {
-                        contains_colon = true;
-                        break;
-                    }
-                }
-                
-                if (contains_colon) {
-                    std::string segment;
-                    for (char ch : value_string) {
-                        if (ch == ':') {
-                            std::cout << segment << "\n";
-                            segment.clear();
-                        } else {
-                            segment += ch;
-                        }
-                    }
-                    std::cout << segment << "\n";
-                } else {
-                    std::cout << value_string << "\n";
-                }
-            } else {
-                std::cout << env_var << ": not found\n";
-            }
-            continue;
-        } else {
-            pid_t child_pid = fork();
-            
-            if (child_pid == 0) {
-                std::vector<std::string> command_parts;
-                std::vector<char*> args_array;
-                std::string token;
-                std::istringstream cmd_stream(cmd_line);
-                
-                while (cmd_stream >> token) {
-                    command_parts.push_back(token);
-                }
-                
-                for (auto& part : command_parts) {
-                    args_array.push_back(const_cast<char*>(part.c_str()));
-                }
-                args_array.push_back(nullptr);
-                
-                execvp(args_array[0], args_array.data());
-                
-                std::cout << args_array[0] << ": unknown command\n";
-                exit(1);
-            } else if (child_pid > 0) {
-                int child_status;
-                waitpid(child_pid, &child_status, 0);
-            } else {
-                std::cerr << "Process creation failed\n";
-            }
-        }
+    if (sscanf(path, "/%255[^/]", username) == 1) {
+        struct passwd* pwd = getpwnam(username);
         
-        std::cout << "$ ";
+        if (pwd != NULL) {
+            return -EEXIST;
+        }
+
+        char* const argv[] = {
+            (char*)"adduser", 
+            (char*)"--disabled-password",
+            (char*)"--gecos", 
+            (char*)"", 
+            (char*)username, 
+            NULL
+        };
+
+        if (run_cmd("adduser", argv) != 0) return -EIO;
     }
-    
+
     return 0;
+}
+
+int users_rmdir(const char* path) {
+    char username[256];
+    
+    if (sscanf(path, "/%255[^/]", username) == 1) {
+        if (strchr(path + 1, '/') == NULL) {
+            struct passwd* pwd = getpwnam(username);
+            
+            if (pwd != NULL) {
+                char* const argv[] = {
+                    (char*)"userdel", 
+                    (char*)"--remove", 
+                    (char*)username, 
+                    NULL
+                };
+
+                if (run_cmd("userdel", argv) != 0) return -EIO;
+                return 0;
+            }
+            return -ENOENT;
+        }
+        return -EPERM;
+    }
+    return -EPERM;
+}
+
+struct fuse_operations users_operations = {};
+
+void init_users_operations() {
+    users_operations.getattr = users_getattr;
+    users_operations.readdir = users_readdir;
+    users_operations.mkdir   = users_mkdir;
+    users_operations.rmdir   = users_rmdir;
+    users_operations.read    = users_read;
+}
+
+void* fuse_thread_function(void* arg) {
+    (void) arg;
+
+    init_users_operations();
+
+    int devnull = open("/dev/null", O_WRONLY);
+    int olderr = dup(STDERR_FILENO);
+    dup2(devnull, STDERR_FILENO);
+    close(devnull);
+
+    char* fuse_argv[] = {
+        (char*)"kubsh",
+        (char*)"-f",
+        (char*)"-odefault_permissions",
+        (char*)"-oauto_unmount",
+        (char*)"/opt/users"
+    };
+
+    int fuse_argc = sizeof(fuse_argv) / sizeof(fuse_argv[0]);
+
+    fuse_main(fuse_argc, fuse_argv, &users_operations, nullptr);
+
+    dup2(olderr, STDERR_FILENO);
+    close(olderr);
+
+    return nullptr;
+}
+
+void fuse_start() {
+    pthread_t fuse_thread;
+    pthread_create(&fuse_thread, nullptr, fuse_thread_function, nullptr);
 }
