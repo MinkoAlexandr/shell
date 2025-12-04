@@ -12,7 +12,7 @@
 
 void handle_sighup(int sig_num) {
     if (sig_num == SIGHUP) {
-        std::cout << "Config updated\n";
+        std::cout << "Configuration reloaded\n";
         std::cout << "$ ";
     }
 }
