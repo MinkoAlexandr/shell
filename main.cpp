@@ -89,7 +89,7 @@ int main() {
 
     signal(SIGHUP, handle_sighup);
     
-    std::cout << "$ ";
+    std::cerr << "$ ";
 
     for (std::string cmd_line; std::getline(std::cin, cmd_line);) {
         if (!cmd_line.empty()) {
@@ -221,6 +221,6 @@ int main() {
             std::cerr << "Failed to create process\n";
         }
     }
-       // std::cout<<"$ ";
+        std::cout<<"$ ";
     }
 }
