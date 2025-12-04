@@ -122,7 +122,7 @@ int main() {
             continue;  
 
         }
-        }  else if (input.substr(0,4) == "\\e $")
+          else if (input.substr(0,4) == "\\e $")
         {
             std::string varName = input.substr(4);
             const char* value = std::getenv(varName.c_str());//Преобразуем C-строку в C++ строку
