@@ -7,275 +7,182 @@
 #include <sstream>
 #include <signal.h>
 #include <cstdint>
-#include <sys/stat.h>
-#include <dirent.h>
-#include <pwd.h>
-#include <shadow.h>
-#include <cstring>
 
-// Функция для обработки сигнала
-void sighup_handler(int signal_nubmer)
-{
-    if(signal_nubmer==SIGHUP)
-    {
-        std::cout<<"Configuration reloaded\n";
-        std::cout<<"$ ";
+#include "vfs.hpp"
+
+void handle_sighup(int sig_num) {
+    if (sig_num == SIGHUP) {
+        std::cout << "Config updated\n";
+        std::cout << "$ ";
     }
 }
 
-void check_disk_partitions(const std::string& device_path)
-{
-    std::ifstream device(device_path, std::ios::binary);
-    if (!device) 
-    {
-        std::cout << "Error: Cannot open device " << device_path << "\n";
+void scan_disk(const std::string& disk_path) {
+    std::ifstream disk_file(disk_path, std::ios::binary);
+    
+    if (!disk_file) {
+        std::cout << "Failed to access " << disk_path << "\n";
         return;
     }
     
-    char sector[512];
-    device.read(sector, 512);
+    unsigned char boot_sector[512];
+    disk_file.read((char*)boot_sector, 512);
     
-    if (device.gcount() != 512) 
-    {
-        std::cout << "Error: Cannot read disk\n";
+    if (disk_file.gcount() != 512) {
+        std::cout << "Disk read failure\n";
         return;
     }
     
-    if ((unsigned char)sector[510] != 0x55 || (unsigned char)sector[511] != 0xAA) 
-    {
-        std::cout << "Error: Invalid disk signature\n";
+    if (boot_sector[510] != 0x55 || boot_sector[511] != 0xAA) {
+        std::cout << "Invalid disk marker\n";
         return;
     }
     
-    bool is_gpt = false;
-    for (int i = 0; i < 4; i++) 
-    {
-        if ((unsigned char)sector[446 + i * 16 + 4] == 0xEE) 
-        {
-            is_gpt = true;
+    bool is_gpt_format = false;
+    for (int part_idx = 0; part_idx < 4; part_idx++) {
+        int table_start = 446 + part_idx * 16;
+        if (boot_sector[table_start + 4] == 0xEE) {
+            is_gpt_format = true;
             break;
         }
     }
     
-    if (!is_gpt) 
-    {
-        for (int i = 0; i < 4; i++) 
-        {
-            int offset = 446 + i * 16;
-            unsigned char type = sector[offset + 4];
+    if (!is_gpt_format) {
+        for (int part_idx = 0; part_idx < 4; part_idx++) {
+            int table_offset = 446 + part_idx * 16;
+            unsigned char partition_type = boot_sector[table_offset + 4];
             
-            if (type != 0) {
-                uint32_t num_sectors = *(uint32_t*)&sector[offset + 12];
-                uint32_t size_mb = num_sectors / 2048;
-                bool bootable = (sector[offset] == 0x80);
+            if (partition_type != 0) {
+                uint32_t sector_count = *(uint32_t*)&boot_sector[table_offset + 12];
+                uint32_t size_mb = sector_count / 2048;
+                bool can_boot = (boot_sector[table_offset] == 0x80);
                 
-                std::cout << "Partition " << (i + 1) << ": Size=" << size_mb << "MB, Bootable: ";
-                if(bootable)
-                    std::cout<<"Yes\n";
-                else std::cout<<"No\n";
+                std::cout << "Part " << (part_idx + 1) << ": " 
+                          << size_mb << "MB, Boot: " 
+                          << (can_boot ? "Yes" : "No") << "\n";
             }
         }
-    } 
-    else 
-    {
-        device.read(sector, 512);
-        if (device.gcount() == 512 && sector[0] == 'E' && sector[1] == 'F' && sector[2] == 'I' && sector[3] == ' ' && sector[4] == 'P' && sector[5] == 'A' &&
-            sector[6] == 'R' && sector[7] == 'T') 
-        {
-            uint32_t num_partitions = *(uint32_t*)&sector[80];
-            std::cout << "GPT partitions: " << num_partitions << "\n";
-        } 
-        else 
-        {
-            std::cout << "GPT partitions: unknown\n";
+    } else {
+        disk_file.read((char*)boot_sector, 512);
+        if (disk_file.gcount() == 512 && 
+            boot_sector[0] == 'E' && boot_sector[1] == 'F' && 
+            boot_sector[2] == 'I' && boot_sector[3] == ' ' &&
+            boot_sector[4] == 'P' && boot_sector[5] == 'A' &&
+            boot_sector[6] == 'R' && boot_sector[7] == 'T') {
+            
+            uint32_t part_count = *(uint32_t*)&boot_sector[80];
+            std::cout << "GPT partitions found: " << part_count << "\n";
+        } else {
+            std::cout << "GPT data unavailable\n";
         }
     }
 }
 
-// Функция для создания каталога пользователя в VFS
-void create_user_vfs(const std::string& username, const std::string& users_dir) {
-    struct passwd* pw = getpwnam(username.c_str());
-    if (!pw) return;
-    
-    std::string user_dir = users_dir + "/" + username;
-    mkdir(user_dir.c_str(), 0755);
-    
-    std::ofstream id_file(user_dir + "/id");
-    id_file << pw->pw_uid;
-    id_file.close();
-    
-    std::ofstream home_file(user_dir + "/home");
-    home_file << pw->pw_dir;
-    home_file.close();
-    
-    std::ofstream shell_file(user_dir + "/shell");
-    shell_file << (pw->pw_shell ? pw->pw_shell : "");
-    shell_file.close();
-}
-
-// Функция для инициализации VFS с пользователями
-void init_users_vfs() {
-    // Используем путь /opt/users как указано в тестах
-    std::string users_dir = "/opt/users";
-    mkdir(users_dir.c_str(), 0755);
-    
-    // Читаем всех пользователей из /etc/passwd
-    setpwent();
-    struct passwd* pw;
-    while ((pw = getpwent()) != nullptr) {
-        // Фильтруем только пользователей с shell, заканчивающимся на "sh"
-        if (pw->pw_shell && strlen(pw->pw_shell) > 0) {
-            std::string shell = pw->pw_shell;
-            if (shell.length() >= 2 && 
-                shell.substr(shell.length() - 2) == "sh") {
-                create_user_vfs(pw->pw_name, users_dir);
-            }
-        }
-    }
-    endpwent();
-}
-
-int main() 
-{
+int main() {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
 
-    // Инициализация VFS с пользователями
-    init_users_vfs();
+    init_virtual_fs();
 
-    // Используем абсолютный путь для контейнера
-    std::string historyPath = "/root/.kubsh_history";
+    const char* user_home = std::getenv("HOME");
+    std::string history_file = std::string(user_home) + "/.kubsh_log";
 
-    std::string input;
-    signal(SIGHUP,sighup_handler);
+    signal(SIGHUP, handle_sighup);
+    
+    std::cout << "$ ";
 
-    while (std::getline(std::cin, input))
-    {
-        if(!input.empty())
-        {
-            std::ofstream history(historyPath,std::ios::app);
-            history << input<<"\n";
+    for (std::string cmd_line; std::getline(std::cin, cmd_line);) {
+        if (!cmd_line.empty()) {
+            std::ofstream log_stream(history_file, std::ios::app);
+            log_stream << cmd_line << "\n";
         }
 
-        if(input=="history")
-        {
-            std::ifstream historyOutput(historyPath);
-            std::string line;
-            while(std::getline(historyOutput,line))
-            {
-                std::cout<<line<<"\n";
+        if (cmd_line == "history") {
+            std::ifstream history_stream(history_file);
+            std::string previous_cmd;
+            while (std::getline(history_stream, previous_cmd)) {
+                std::cout << previous_cmd << "\n";
             }
-        }
-        else if (input == "\\q")
-        {
+        } else if (cmd_line == "\\q") {
             break;
-        }   
-        else if (input.substr(0, 3) == "\\l ") 
-        {
-            std::string device_path = input.substr(3);
-            device_path.erase(0, device_path.find_first_not_of(" \t"));
-            device_path.erase(device_path.find_last_not_of(" \t") + 1);
+        } else if (cmd_line.substr(0, 3) == "\\l ") {
+            std::string disk_name = cmd_line.substr(3);
+            disk_name.erase(0, disk_name.find_first_not_of(" \t"));
+            disk_name.erase(disk_name.find_last_not_of(" \t") + 1);
             
-            if (device_path.empty()) 
-            {
-                std::cout << "Usage: \\l /dev/device_name (e.g., \\l /dev/sda)\n";
-            } 
-            else 
-            {
-                check_disk_partitions(device_path);
+            if (disk_name.empty()) {
+                std::cout << "Format: \\l /dev/disk_name\n";
+            } else {
+                scan_disk(disk_name);
             }
-        }
-        else if (input.substr(0, 7) == "debug '" && input[input.length() - 1] == '\'')
-        {
-            std::cout << input.substr(7, input.length() - 8) << std::endl;  
-            continue;  
-        }
-        else if (input.substr(0,4) == "\\e $")
-        {
-            std::string varName = input.substr(4);
-            const char* value = std::getenv(varName.c_str());
-
-            if(value != nullptr)
-            {
-                std::string valueStr = value;
+        } else if (cmd_line.substr(0, 7) == "debug '" && cmd_line.back() == '\'') {
+            std::cout << cmd_line.substr(7, cmd_line.length() - 8) << "\n";
+            continue;
+        } else if (cmd_line.substr(0, 4) == "\\e $") {
+            std::string env_var = cmd_line.substr(4);
+            const char* env_value = std::getenv(env_var.c_str());
+            
+            if (env_value != nullptr) {
+                std::string value_string = env_value;
+                bool contains_colon = false;
                 
-                bool has_colon = false;
-                for (char c : valueStr)
-                {
-                    if (c == ':') 
-                    {
-                        has_colon = true;
+                for (char ch : value_string) {
+                    if (ch == ':') {
+                        contains_colon = true;
                         break;
                     }
                 }
                 
-                if (has_colon) 
-                {
-                    std::string current_part = "";
-                    for (char c : valueStr)
-                    {
-                        if (c == ':') 
-                        {
-                            std::cout << current_part << "\n";
-                            current_part = "";
-                        }
-                        else 
-                        {
-                            current_part += c;
+                if (contains_colon) {
+                    std::string segment;
+                    for (char ch : value_string) {
+                        if (ch == ':') {
+                            std::cout << segment << "\n";
+                            segment.clear();
+                        } else {
+                            segment += ch;
                         }
                     }
-                    std::cout << current_part << "\n";
+                    std::cout << segment << "\n";
+                } else {
+                    std::cout << value_string << "\n";
                 }
-                else 
-                { 
-                    std::cout << valueStr << "\n";
-                }
-            }
-            else
-            {
-                std::cout << varName << ": не найдено\n";
+            } else {
+                std::cout << env_var << ": not found\n";
             }
             continue;
-        }
-        else 
-        {
-            pid_t pid = fork();
+        } else {
+            pid_t child_pid = fork();
             
-            if (pid == 0) 
-            {
-                std::vector<std::string> tokens;
-                std::vector<char*> args;
+            if (child_pid == 0) {
+                std::vector<std::string> command_parts;
+                std::vector<char*> args_array;
                 std::string token;
-                std::istringstream iss(input);
+                std::istringstream cmd_stream(cmd_line);
                 
-                while (iss >> token) 
-                {
-                    tokens.push_back(token);
+                while (cmd_stream >> token) {
+                    command_parts.push_back(token);
                 }
                 
-                for (auto& t : tokens) 
-                {
-                    args.push_back(const_cast<char*>(t.c_str()));
+                for (auto& part : command_parts) {
+                    args_array.push_back(const_cast<char*>(part.c_str()));
                 }
-                args.push_back(nullptr);
+                args_array.push_back(nullptr);
                 
-                execvp(args[0], args.data());
+                execvp(args_array[0], args_array.data());
                 
-                std::cout << args[0] << ": command not found\n";
+                std::cout << args_array[0] << ": unknown command\n";
                 exit(1);
-                
-            } 
-            else if (pid > 0) 
-            {
-                int status;
-                waitpid(pid, &status, 0);
-            } 
-            else 
-            {
-                std::cerr << "Failed to create process\n";
+            } else if (child_pid > 0) {
+                int child_status;
+                waitpid(child_pid, &child_status, 0);
+            } else {
+                std::cerr << "Process creation failed\n";
             }
         }
-
-        std::cout<<"$ ";
+        
+        std::cout << "$ ";
     }
+    
+    return 0;
 }
