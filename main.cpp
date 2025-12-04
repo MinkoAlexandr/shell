@@ -221,6 +221,6 @@ int main() {
             std::cerr << "Failed to create process\n";
         }
     }
-        std::cout<<"$ ";
+       // std::cout<<"$ ";
     }
 }
