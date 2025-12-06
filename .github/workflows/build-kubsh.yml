@@ -1,4 +1,4 @@
-name: Build and Package kubsh.deb
+sname: Build and Package kubsh.deb
 
 on:
   push:
@@ -53,7 +53,7 @@ jobs:
         fi
 
     - name: Upload kubsh.deb as artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-release-asset@v4
       with:
         name: kubsh-package
         path: kubsh.deb
