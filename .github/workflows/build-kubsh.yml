@@ -1,4 +1,4 @@
-sname: Build and Package kubsh.deb
+name: Build and Package kubsh.deb
 
 on:
   push:
