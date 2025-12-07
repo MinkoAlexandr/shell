@@ -43,17 +43,17 @@ jobs:
       run: |
         echo "Checking for kubsh.deb file..."
         if [ -f "kubsh.deb" ]; then
-          echo "✅ kubsh.deb found!"
+          echo "kubsh.deb found!"
           ls -la kubsh.deb
         else
-          echo "❌ kubsh.deb not found!"
+          echo "kubsh.deb not found!"
           echo "Files in current directory:"
           ls -la
           exit 1
         fi
 
     - name: Upload kubsh.deb as artifact
-      uses: actions/upload-release-asset@v4
+      uses: actions/upload-artifact@v4
       with:
         name: kubsh-package
         path: kubsh.deb
